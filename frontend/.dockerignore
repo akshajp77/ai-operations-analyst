@@ -1,0 +1,25 @@
+# Keeping node_modules out of the build context is the single biggest win
+# here: it avoids shipping a host-specific tree and cuts context upload from
+# hundreds of megabytes to a few.
+
+node_modules/
+.next/
+out/
+build/
+coverage/
+playwright-report/
+test-results/
+
+# Secrets. NEXT_PUBLIC_* values are inlined into the client bundle at build
+# time and must be passed as explicit build args, never leaked via a copied
+# .env file.
+.env
+.env.*
+!.env.example
+
+.git/
+.gitignore
+.DS_Store
+Dockerfile
+.dockerignore
+README.md

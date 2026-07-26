@@ -1,0 +1,104 @@
+# Local development stack.
+#
+# Goal: `make up` gives a new engineer a working system with no host-level
+# PostgreSQL, no version mismatch, and no README section titled "known setup
+# issues". Production is deployed from the same Dockerfiles; only the
+# overrides below (source mounts, --reload) are development-only.
+
+name: ai-operations-analyst
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-ai_ops_analyst}
+      # Checksums on from day one — cheaper to enable now than to rebuild a
+      # cluster later when you want them.
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    ports:
+      # Exposed so a local psql, a GUI client, or a natively-run backend can
+      # reach it. Bound to loopback only, never 0.0.0.0.
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Anything in this directory runs once, on first initialisation only.
+      - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # `pg_isready` alone returns true while the server is still starting.
+      # The explicit user and database make it a real readiness signal, which
+      # is what `depends_on: service_healthy` relies on.
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-ai_ops_analyst}
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: runtime
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      # Overrides for the container network: `db` is the service hostname,
+      # and the compose-level LOG_FORMAT wins over the one in backend/.env.
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-ai_ops_analyst}
+      LOG_FORMAT: ${LOG_FORMAT:-console}
+      CORS_ORIGINS: http://localhost:3000
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      # Source mount + --reload gives edit-and-refresh without a rebuild.
+      # Development only: the image itself is production-shaped.
+      - ./backend/app:/app/app:ro
+      - backend_data:/app/.data
+    command:
+      - uvicorn
+      - app.main:app
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8000"
+      - --reload
+      - --reload-dir
+      - /app/app
+    depends_on:
+      db:
+        # Wait for the healthcheck, not merely for the container to exist.
+        # Without this the API starts, fails to connect, and crash-loops until
+        # PostgreSQL finishes initialising.
+        condition: service_healthy
+
+  web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: runtime
+      args:
+        # Baked into the client bundle at build time. This is the URL the
+        # *browser* uses, so it is localhost — not the `api` service name,
+        # which only resolves inside the compose network.
+        NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+    restart: unless-stopped
+    environment:
+      # Used by Next.js server components and route handlers, which run inside
+      # the compose network and therefore address the service directly.
+      API_INTERNAL_BASE_URL: http://api:8000
+      NODE_ENV: production
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - api
+
+volumes:
+  postgres_data:
+    driver: local
+  backend_data:
+    driver: local

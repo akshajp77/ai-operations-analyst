@@ -1,0 +1,245 @@
+# Continuous integration.
+#
+# Two principles:
+#
+# 1. CI runs the same commands a developer runs. Every step below shells out
+#    to the same tools the Makefile does, so "green locally, red in CI" is a
+#    bug in the workflow rather than a fact of life.
+# 2. Jobs are split by concern and run in parallel. A frontend typo should not
+#    wait behind the Python test suite before telling you about itself.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# A new push to the same branch cancels the previous run. Reviewing a stale
+# result wastes both runner minutes and reviewer attention.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "22"
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Backend — lint, types, tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+
+      - name: Install
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      # Lint before tests: a lint failure is diagnosable in seconds, while a
+      # test run takes minutes. Fail on the cheap signal first.
+      - name: Lint
+        working-directory: backend
+        run: ruff check --output-format=github .
+
+      - name: Format check
+        working-directory: backend
+        run: ruff format --check .
+
+      - name: Type check
+        working-directory: backend
+        run: mypy app
+
+      - name: Tests
+        working-directory: backend
+        # Unit and integration only. Neither needs a database, which keeps
+        # this job fast; e2e runs in its own job with real PostgreSQL.
+        run: pytest -m "unit or integration" --cov --cov-report=xml --cov-report=term-missing
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: backend/coverage.xml
+          retention-days: 7
+
+  frontend:
+    name: Frontend — lint, types, tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install
+        working-directory: frontend
+        # `npm ci` installs exactly the lockfile. `npm install` may silently
+        # resolve a different version than the one that was reviewed.
+        run: npm ci
+
+      - name: Lint
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Format check
+        working-directory: frontend
+        run: npm run format:check
+
+      - name: Type check
+        working-directory: frontend
+        run: npm run typecheck
+
+      - name: Tests
+        working-directory: frontend
+        run: npm run test:run
+
+  contract:
+    name: API contract — types are current
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e "./backend[dev]"
+          cd frontend && npm ci
+
+      # The point of this job: prove the frontend still compiles against the
+      # CURRENT backend schema. A renamed Pydantic field that nobody
+      # regenerated types for fails here, not in a customer's browser.
+      - name: Regenerate types from the live schema
+        run: |
+          mkdir -p packages/shared-types
+          cd backend && python -c \
+            "import json; from app.main import create_app; print(json.dumps(create_app().openapi(), indent=2))" \
+            > ../packages/shared-types/openapi.json
+          cd ../frontend && npm run generate:types
+
+      - name: Frontend type-checks against it
+        working-directory: frontend
+        run: npm run typecheck
+
+  e2e:
+    name: End-to-end — real PostgreSQL
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ai_ops_analyst_test
+        ports:
+          - 5432:5432
+        # Without a health check the job races the database and fails
+        # intermittently — the classic flaky CI cause.
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+
+      - name: Install
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      # Running migrations in CI verifies they actually apply to an empty
+      # database. A migration that only works against a developer's
+      # long-lived local database is a failed deploy waiting to happen.
+      - name: Apply migrations
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/ai_ops_analyst_test
+        run: alembic upgrade head
+
+      - name: E2E tests
+        working-directory: backend
+        env:
+          ENVIRONMENT: test
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/ai_ops_analyst_test
+        run: pytest -m e2e
+
+  docker:
+    name: Docker images build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+
+      # Build only — no push. This catches a broken Dockerfile at review time
+      # rather than at deploy time, which is when it is most expensive.
+      - name: Backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          push: false
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+
+      - name: Frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          push: false
+          build-args: |
+            NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+
+  # A single required status check for branch protection. Adding a job above
+  # does not require editing the repository settings — only this `needs` list.
+  ci:
+    name: CI
+    runs-on: ubuntu-latest
+    needs: [backend, frontend, contract, e2e, docker]
+    if: always()
+    steps:
+      - name: Verify all jobs succeeded
+        run: |
+          if [[ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" == "true" ]]; then
+            echo "One or more jobs failed."
+            exit 1
+          fi
+          echo "All checks passed."

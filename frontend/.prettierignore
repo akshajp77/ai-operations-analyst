@@ -1,0 +1,16 @@
+node_modules/
+.next/
+out/
+build/
+coverage/
+
+# Generated from the backend's OpenAPI document. Formatting it would create a
+# spurious diff on every regeneration.
+src/types/api.generated.ts
+
+# shadcn/ui components are vendored upstream source. Leaving them unformatted
+# keeps `npx shadcn diff` useful for spotting real upstream changes.
+src/components/ui/
+
+package-lock.json
+*.md

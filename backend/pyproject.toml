@@ -1,0 +1,161 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ai-operations-analyst-backend"
+version = "0.1.0"
+description = "AI Operations Analyst — analytics and AI reasoning backend"
+readme = "README.md"
+# Floor-only constraint so the project is never artificially blocked from a
+# future interpreter. The *supported and tested* runtime is pinned to 3.12 in
+# .python-version, the Dockerfile, and CI.
+requires-python = ">=3.12"
+license = { text = "Proprietary" }
+
+dependencies = [
+  # --- Web framework -------------------------------------------------------
+  "fastapi>=0.115,<1.0",
+  "uvicorn[standard]>=0.32,<1.0",
+  "python-multipart>=0.0.12",       # multipart/form-data file uploads
+
+  # --- Configuration & validation -----------------------------------------
+  "pydantic>=2.9,<3.0",
+  "pydantic-settings>=2.6,<3.0",
+
+  # --- Persistence ---------------------------------------------------------
+  "sqlalchemy[asyncio]>=2.0,<3.0",
+  "asyncpg>=0.30",                  # async PostgreSQL driver (runtime)
+  "psycopg[binary]>=3.2",           # sync driver, used by Alembic migrations
+  "alembic>=1.14,<2.0",
+
+  # --- Data engine ---------------------------------------------------------
+  "pandas>=2.2,<3.0",
+  "polars>=1.12,<2.0",
+  "duckdb>=1.1,<2.0",
+  "pyarrow>=18.0",                  # zero-copy bridge between pandas/polars/duckdb
+  "openpyxl>=3.1",                  # .xlsx reader
+  "numpy>=1.26,<3.0",
+
+  # --- AI ------------------------------------------------------------------
+  "openai>=1.55",
+
+  # --- Cross-cutting -------------------------------------------------------
+  "structlog>=24.4",                # structured, JSON-capable logging
+  "tenacity>=9.0",                  # retry policy for outbound calls
+  "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3",
+  "pytest-asyncio>=0.24",
+  "pytest-cov>=6.0",
+  "ruff>=0.8",
+  "mypy>=1.13",
+  "types-openpyxl",
+  "pandas-stubs",
+  "asgi-lifespan>=2.1",             # drive FastAPI lifespan inside tests
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+
+# ---------------------------------------------------------------------------
+# Ruff — single tool for linting AND formatting (replaces black + isort +
+# flake8 + pyupgrade). One tool means one config and no formatter disputes.
+# ---------------------------------------------------------------------------
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["app", "tests"]
+
+[tool.ruff.lint]
+select = [
+  "E", "W",   # pycodestyle
+  "F",        # pyflakes
+  "I",        # isort — deterministic import order
+  "N",        # pep8-naming
+  "UP",       # pyupgrade — keep syntax modern
+  "B",        # flake8-bugbear — real bug patterns
+  "A",        # flake8-builtins — no shadowing builtins
+  "C4",       # comprehensions
+  "T20",      # flake8-print — no stray print(); we log
+  "SIM",      # simplify
+  "ARG",      # unused arguments
+  "PTH",      # prefer pathlib over os.path
+  "RUF",      # ruff-specific
+  "ASYNC",    # async correctness (e.g. blocking calls in async defs)
+  "S",        # bandit — security lint
+]
+ignore = [
+  "E501",     # line length is enforced by the formatter, not the linter
+  "B008",     # FastAPI's Depends() in defaults is the documented idiom
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests may assert, use magic values, and hardcode throwaway credentials.
+"tests/**/*.py" = ["S101", "S105", "S106", "ARG001", "ARG002"]
+"app/db/migrations/**/*.py" = ["ARG001", "N999"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+
+# ---------------------------------------------------------------------------
+# mypy — strict by default. Types are a design tool here, not decoration:
+# the analytics layer's contracts are what let us refactor engines safely.
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+warn_unused_ignores = true
+disallow_any_generics = true
+plugins = ["pydantic.mypy"]
+exclude = ["^app/db/migrations/versions/"]
+
+[[tool.mypy.overrides]]
+# Third-party packages that ship no type information.
+module = ["duckdb.*", "polars.*"]
+ignore_missing_imports = true
+
+
+# ---------------------------------------------------------------------------
+# Pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = [
+  "--strict-markers",
+  "--strict-config",
+  "-ra",
+]
+markers = [
+  "unit: pure, in-process, no I/O. Must run in milliseconds.",
+  "integration: requires PostgreSQL and/or the HTTP app.",
+  "e2e: exercises the full stack; slowest tier.",
+  "ai: performs a real model call. Excluded from default runs.",
+]
+
+[tool.coverage.run]
+source = ["app"]
+branch = true
+omit = ["app/db/migrations/*", "app/main.py"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+exclude_lines = [
+  "pragma: no cover",
+  "if TYPE_CHECKING:",
+  "raise NotImplementedError",
+  "@abstractmethod",
+  "@overload",
+]

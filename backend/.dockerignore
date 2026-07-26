@@ -1,0 +1,36 @@
+# Everything excluded here stays out of the build context, which makes builds
+# faster and — more importantly — makes it impossible to accidentally bake a
+# local .env into a published image.
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Python artefacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Tests are not shipped in the runtime image. CI runs them against the source
+# tree; including them here would only enlarge the image.
+tests/
+
+# Local data
+.data/
+*.db
+*.sqlite3
+
+# Tooling
+.git/
+.gitignore
+.DS_Store
+Dockerfile
+.dockerignore

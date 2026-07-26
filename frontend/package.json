@@ -1,0 +1,59 @@
+{
+  "name": "@ai-ops-analyst/frontend",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "dev": "next dev --turbopack",
+    "build": "next build --turbopack",
+    "start": "next start",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "generate:types": "openapi-typescript ../packages/shared-types/openapi.json -o ./src/types/api.generated.ts",
+    "check": "npm run lint && npm run format:check && npm run typecheck && npm run test:run"
+  },
+  "dependencies": {
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "next": "15.5.21",
+    "@tanstack/react-query": "^5.62.0",
+    "zod": "^3.24.0",
+    "clsx": "^2.1.1",
+    "tailwind-merge": "^2.5.5",
+    "class-variance-authority": "^0.7.1",
+    "lucide-react": "^0.468.0",
+    "recharts": "^2.15.0",
+    "date-fns": "^4.1.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2",
+    "@types/node": "^22.10.1",
+    "@types/react": "^19.0.1",
+    "@types/react-dom": "^19.0.1",
+    "@tailwindcss/postcss": "^4",
+    "tailwindcss": "^4",
+    "tw-animate-css": "^1.2.0",
+    "eslint": "^9.17.0",
+    "eslint-config-next": "15.5.21",
+    "eslint-config-prettier": "^9.1.0",
+    "@eslint/eslintrc": "^3.2.0",
+    "prettier": "^3.4.2",
+    "prettier-plugin-tailwindcss": "^0.6.9",
+    "vitest": "^2.1.8",
+    "@vitejs/plugin-react": "^4.3.4",
+    "jsdom": "^25.0.1",
+    "@testing-library/react": "^16.1.0",
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/user-event": "^14.5.2",
+    "@vitest/coverage-v8": "^2.1.8",
+    "openapi-typescript": "^7.4.4"
+  }
+}

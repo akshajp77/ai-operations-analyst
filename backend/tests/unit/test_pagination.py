@@ -37,12 +37,15 @@ class TestPage:
         assert page.meta.total_pages == 3
 
     def test_exact_multiple_does_not_add_an_empty_page(self) -> None:
-        page = Page.create(items=[], total_items=20, params=PageParams(page=2, page_size=10))
+        # Annotated because an empty `items` list leaves `ItemT` unsolvable.
+        page: Page[int] = Page.create(
+            items=[], total_items=20, params=PageParams(page=2, page_size=10)
+        )
         assert page.meta.total_pages == 2
 
     def test_empty_collection_has_zero_pages(self) -> None:
         """Zero pages, not one — an empty list should read as genuinely empty."""
-        page = Page.create(items=[], total_items=0, params=PageParams())
+        page: Page[int] = Page.create(items=[], total_items=0, params=PageParams())
         assert page.meta.total_pages == 0
         assert page.meta.has_next is False
         assert page.meta.has_previous is False

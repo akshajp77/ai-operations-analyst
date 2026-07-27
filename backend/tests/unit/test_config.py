@@ -30,12 +30,10 @@ class TestDatabaseSettings:
     def test_rejects_synchronous_driver(self) -> None:
         """A sync DSN would deadlock the event loop, so it must fail at boot."""
         with pytest.raises(ValidationError, match=r"postgresql\+asyncpg"):
-            DatabaseSettings(url="postgresql://user:pw@localhost:5432/db")  # type: ignore[arg-type]
+            DatabaseSettings(url="postgresql://user:pw@localhost:5432/db")
 
     def test_derives_sync_url_for_alembic(self) -> None:
-        settings = DatabaseSettings(
-            url="postgresql+asyncpg://user:pw@localhost:5432/db"  # type: ignore[arg-type]
-        )
+        settings = DatabaseSettings(url="postgresql+asyncpg://user:pw@localhost:5432/db")
         assert settings.sync_url.startswith("postgresql+psycopg://")
 
     def test_rejects_out_of_range_pool_size(self) -> None:
@@ -59,22 +57,22 @@ class TestProductionHardening:
         with pytest.raises(ValidationError, match="SECRET_KEY"):
             Settings(
                 environment=Environment.PRODUCTION,
-                openai={"api_key": "sk-test"},  # type: ignore[arg-type]
+                openai={"api_key": "sk-test"},
             )
 
     def test_missing_openai_key_is_rejected(self) -> None:
         with pytest.raises(ValidationError, match="OPENAI_API_KEY"):
             Settings(
                 environment=Environment.PRODUCTION,
-                secret_key="a-real-generated-secret",  # type: ignore[arg-type]
+                secret_key="a-real-generated-secret",
             )
 
     def test_wildcard_cors_is_rejected(self) -> None:
         with pytest.raises(ValidationError, match="CORS_ORIGINS"):
             Settings(
                 environment=Environment.PRODUCTION,
-                secret_key="a-real-generated-secret",  # type: ignore[arg-type]
-                openai={"api_key": "sk-test"},  # type: ignore[arg-type]
+                secret_key="a-real-generated-secret",
+                openai={"api_key": "sk-test"},
                 cors_origins=("*",),
             )
 
@@ -85,8 +83,8 @@ class TestProductionHardening:
     def test_valid_production_configuration_is_accepted(self) -> None:
         settings = Settings(
             environment=Environment.PRODUCTION,
-            secret_key="a-real-generated-secret",  # type: ignore[arg-type]
-            openai={"api_key": "sk-test"},  # type: ignore[arg-type]
+            secret_key="a-real-generated-secret",
+            openai={"api_key": "sk-test"},
             cors_origins=("https://app.example.com",),
         )
         assert settings.environment is Environment.PRODUCTION
@@ -99,7 +97,7 @@ class TestProductionHardening:
 class TestSecretHandling:
     def test_secrets_are_masked_in_repr(self) -> None:
         """An accidental log line or traceback must not print the key."""
-        settings = Settings(openai={"api_key": "sk-super-secret-value"})  # type: ignore[arg-type]
+        settings = Settings(openai={"api_key": "sk-super-secret-value"})
         assert "sk-super-secret-value" not in repr(settings)
         assert settings.openai.api_key.get_secret_value() == "sk-super-secret-value"
 
@@ -107,9 +105,9 @@ class TestSecretHandling:
 class TestCorsParsing:
     def test_accepts_comma_separated_string(self) -> None:
         """Docker Compose and most secret managers only supply plain strings."""
-        settings = Settings(cors_origins="http://a.test, http://b.test")  # type: ignore[arg-type]
+        settings = Settings(cors_origins="http://a.test, http://b.test")
         assert settings.cors_origins == ("http://a.test", "http://b.test")
 
     def test_ignores_empty_segments(self) -> None:
-        settings = Settings(cors_origins="http://a.test,,")  # type: ignore[arg-type]
+        settings = Settings(cors_origins="http://a.test,,")
         assert settings.cors_origins == ("http://a.test",)

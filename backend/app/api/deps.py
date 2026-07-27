@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings, get_settings
 from app.core.exceptions import ConfigurationError
 from app.db.session import Database
+from app.storage.base import ObjectStorage
 
 
 def get_app_settings(request: Request) -> Settings:
@@ -58,6 +59,26 @@ def get_database(request: Request) -> Database:
 
 
 DatabaseDep = Annotated[Database, Depends(get_database)]
+
+
+def get_object_storage(request: Request) -> ObjectStorage:
+    """Return the process-wide storage adapter created during startup.
+
+    Read from ``app.state`` for the same reason as the database: the adapter is
+    built once from configuration, and resolving it per request would rebuild
+    connection state on every upload.
+
+    The annotation is the ``ObjectStorage`` protocol, not a concrete class, so
+    a test can substitute an in-memory fake and neither the route nor the
+    service can tell the difference.
+    """
+    storage: ObjectStorage | None = getattr(request.app.state, "object_storage", None)
+    if storage is None:
+        raise ConfigurationError("Object storage was not initialised during application startup.")
+    return storage
+
+
+ObjectStorageDep = Annotated[ObjectStorage, Depends(get_object_storage)]
 
 
 async def get_db(database: DatabaseDep) -> AsyncIterator[AsyncSession]:

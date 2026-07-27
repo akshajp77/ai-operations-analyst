@@ -14,14 +14,18 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
+from app.api.v1.routes import datasets
+
 api_router = APIRouter()
 
 # Feature routers are registered here as they land. Each `tag` becomes a
 # section of the OpenAPI document and therefore a namespace in the generated
-# TypeScript client:
+# TypeScript client.
+api_router.include_router(datasets.router, prefix="/datasets", tags=["datasets"])
+
+# Still to come:
 #
-# from app.api.v1.routes import analyses, datasets, reports
+# from app.api.v1.routes import analyses, reports
 #
-# api_router.include_router(datasets.router, prefix="/datasets", tags=["datasets"])
 # api_router.include_router(analyses.router, prefix="/analyses", tags=["analyses"])
 # api_router.include_router(reports.router,  prefix="/reports",  tags=["reports"])

@@ -31,6 +31,7 @@ from app.core.middleware import (
     SecurityHeadersMiddleware,
 )
 from app.db.session import Database
+from app.storage.factory import build_object_storage
 
 log = get_logger(__name__)
 
@@ -64,6 +65,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     database = Database(settings.database)
     database.connect()
     app.state.database = database
+
+    # Built here rather than per request: the adapter is configuration-derived
+    # and holds connection state. A misconfigured backend therefore fails
+    # startup, where it is one loud error, instead of failing the first upload,
+    # where it is a 500 for a user.
+    app.state.object_storage = build_object_storage(settings.storage)
 
     log.info(
         "application.startup",

@@ -35,12 +35,14 @@ dependencies = [
   "duckdb>=1.1,<2.0",
   "pyarrow>=18.0",                  # zero-copy bridge between pandas/polars/duckdb
   "openpyxl>=3.1",                  # .xlsx reader
+  "xlrd>=2.0",                      # .xls reader; openpyxl cannot read the legacy format
   "numpy>=1.26,<3.0",
 
   # --- AI ------------------------------------------------------------------
   "openai>=1.55",
 
   # --- Cross-cutting -------------------------------------------------------
+  "anyio>=4.6",                     # to_thread.run_sync: blocking work off the event loop
   "structlog>=24.4",                # structured, JSON-capable logging
   "tenacity>=9.0",                  # retry policy for outbound calls
   "httpx>=0.27",

@@ -27,13 +27,6 @@ export default function UploadPage() {
       </div>
 
       <UploadDropzone />
-
-      {/* Remove together with `useSimulatedUpload`'s fake transfer. Until the
-          API is wired in, saying so on screen is the only thing stopping this
-          page from being demoed as working. */}
-      <p className="text-muted-foreground text-xs">
-        Preview build — uploads are simulated in the browser and no file leaves this page.
-      </p>
     </main>
   );
 }

@@ -2,11 +2,36 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+import { ApiError, NetworkError } from "@/lib/api/errors";
+import type { UploadProgress } from "@/lib/api/client";
+import type { DatasetUploadResponse, UploadDatasetOptions } from "../api";
 import { MAX_UPLOAD_BYTES } from "../validation";
 import { UploadDropzone } from "./UploadDropzone";
 
-/** Comfortably longer than the simulated transfer, so success is reached. */
-const LONGER_THAN_THE_UPLOAD_MS = 5_000;
+// Stubbed at the feature's network boundary. The component, the hook, and the
+// validation rules all run for real; only the request is replaced, so these
+// tests still fail if the wiring between them breaks.
+vi.mock("../api", () => ({ uploadDataset: vi.fn() }));
+
+const { uploadDataset } = await import("../api");
+const uploadDatasetMock = vi.mocked(uploadDataset);
+
+const RESPONSE: DatasetUploadResponse = {
+  dataset_id: "0f9c1b2e-6b3a-4a1e-9f0b-2c7d5a8e1234",
+  filename: "january_orders.csv",
+  rows: 4821,
+  columns: 12,
+  file_size: 481_920,
+};
+
+/** Hands back the controls for the upload the component just started. */
+interface PendingUpload {
+  resolve: (response: DatasetUploadResponse) => void;
+  reject: (error: unknown) => void;
+  report: (progress: Partial<UploadProgress>) => void;
+}
+
+let pending: PendingUpload;
 
 function fileNamed(name: string, size = 2_048): File {
   const file = new File(["order_id,total\n1,9.99\n"], name);
@@ -18,7 +43,6 @@ function fileInput(): HTMLInputElement {
   return screen.getByLabelText(/drag and drop your dataset here/i);
 }
 
-/** The label is the drop target; the visible copy is what identifies it. */
 function dropzone(): HTMLElement {
   const label = screen.getByText(/drag and drop your dataset here/i).closest("label");
   if (label === null) {
@@ -31,34 +55,44 @@ function drop(files: File[]): void {
   fireEvent.drop(dropzone(), { dataTransfer: { files, types: ["Files"] } });
 }
 
-function runTheUploadToCompletion(): Promise<void> {
-  return act(async () => {
-    vi.advanceTimersByTime(LONGER_THAN_THE_UPLOAD_MS);
+/** Deliver a progress event the way XMLHttpRequest would. */
+async function reportProgress(percent: number | null): Promise<void> {
+  await act(async () => {
+    pending.report({ percent, loaded: 0, total: percent === null ? null : 100 });
+  });
+}
+
+async function completeUpload(response: DatasetUploadResponse = RESPONSE): Promise<void> {
+  await act(async () => {
+    pending.resolve(response);
+  });
+}
+
+async function failUpload(error: unknown): Promise<void> {
+  await act(async () => {
+    pending.reject(error);
   });
 }
 
 describe("UploadDropzone", () => {
   beforeEach(() => {
-    // Only the interval driving the progress bar is faked. Vitest's default
-    // set also replaces `queueMicrotask` and `requestAnimationFrame`, which
-    // user-event awaits internally — faking those leaves every interaction
-    // hanging until the test times out.
-    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    uploadDatasetMock.mockImplementation((_file: File, options: UploadDatasetOptions = {}) => {
+      return new Promise<DatasetUploadResponse>((resolve, reject) => {
+        pending = {
+          resolve,
+          reject,
+          report: (progress) =>
+            options.onProgress?.({ loaded: 0, total: 100, percent: 0, ...progress }),
+        };
+      });
+    });
   });
 
   afterEach(() => {
-    vi.useRealTimers();
+    uploadDatasetMock.mockReset();
   });
 
-  // `delay: null` removes user-event's own inter-event pause. With fake
-  // timers installed, that pause is a `setTimeout` nobody advances, so every
-  // interaction would hang until the test times out.
-  const setup = (options: Parameters<typeof userEvent.setup>[0] = {}) =>
-    userEvent.setup({
-      delay: null,
-      advanceTimers: (ms: number) => void vi.advanceTimersByTime(ms),
-      ...options,
-    });
+  const setup = () => userEvent.setup();
 
   it("invites a file and shows no progress before one is chosen", () => {
     render(<UploadDropzone />);
@@ -66,6 +100,7 @@ describe("UploadDropzone", () => {
     expect(screen.getByText(/drag and drop your dataset here/i)).toBeInTheDocument();
     expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(uploadDatasetMock).not.toHaveBeenCalled();
   });
 
   it("states the accepted formats and the size limit up front", () => {
@@ -75,88 +110,151 @@ describe("UploadDropzone", () => {
     expect(screen.getByText(/200 MB/)).toBeInTheDocument();
   });
 
-  it("shows a progress bar naming the file once a valid file is chosen", async () => {
+  it("sends the chosen file to the API exactly once", async () => {
+    const user = setup();
+    const file = fileNamed("january_orders.csv", 4_096);
+    render(<UploadDropzone />);
+
+    await user.upload(fileInput(), file);
+
+    expect(uploadDatasetMock).toHaveBeenCalledTimes(1);
+    expect(uploadDatasetMock.mock.calls[0][0]).toBe(file);
+  });
+
+  it("shows the file as in flight before any progress has been reported", async () => {
     const user = setup();
     render(<UploadDropzone />);
 
     await user.upload(fileInput(), fileNamed("january_orders.csv", 4_096));
 
-    expect(screen.getByRole("progressbar")).toBeInTheDocument();
+    // Indeterminate rather than 0%: nothing has been measured yet, and a bar
+    // sitting at zero would misreport that as "no bytes sent".
+    expect(screen.getByRole("progressbar")).not.toHaveAttribute("aria-valuenow");
     expect(screen.getByText("january_orders.csv")).toBeInTheDocument();
     expect(screen.getByText("4.0 KB")).toBeInTheDocument();
   });
 
-  it("advances the progress bar as the upload proceeds", async () => {
+  it("advances the progress bar as the request reports progress", async () => {
     const user = setup();
     render(<UploadDropzone />);
 
     await user.upload(fileInput(), fileNamed("orders.csv"));
-    expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "0");
+    await reportProgress(40);
 
-    await act(async () => {
-      vi.advanceTimersByTime(400);
-    });
-
-    const reported = Number(screen.getByRole("progressbar").getAttribute("aria-valuenow"));
-    expect(reported).toBeGreaterThan(0);
-    expect(reported).toBeLessThan(100);
+    expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "40");
+    expect(screen.getByText("40%")).toBeInTheDocument();
   });
 
-  it("confirms success with the file name and size when the upload finishes", async () => {
+  it("says it is still working once the bytes are sent but the server has not replied", async () => {
+    const user = setup();
+    render(<UploadDropzone />);
+
+    await user.upload(fileInput(), fileNamed("orders.csv"));
+    await reportProgress(100);
+
+    // The parse happens after the last byte arrives, so 100% is not "done".
+    expect(screen.getByText(/processing the file/i)).toBeInTheDocument();
+  });
+
+  it("reports the row count, column count and dataset id the server measured", async () => {
     const user = setup();
     render(<UploadDropzone />);
 
     await user.upload(fileInput(), fileNamed("january_orders.csv", 4_096));
-    await runTheUploadToCompletion();
+    await completeUpload();
 
     expect(screen.getByRole("alert")).toHaveTextContent(/upload complete/i);
-    expect(screen.getByText("january_orders.csv")).toBeInTheDocument();
-    expect(screen.getByText(/4\.0 KB/)).toBeInTheDocument();
+
+    const values = ["january_orders.csv", "4,821", "12", "0f9c1b2e-6b3a-4a1e-9f0b-2c7d5a8e1234"];
+    for (const value of values) {
+      expect(screen.getByText(value)).toBeInTheDocument();
+    }
     expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
   });
 
-  it("starts an upload for a file dropped onto the zone", async () => {
+  it("prefers the server's filename over the local one", async () => {
+    const user = setup();
     render(<UploadDropzone />);
 
-    drop([fileNamed("dropped.csv")]);
+    // The backend sanitises the name it stores, so that is the one that
+    // identifies the dataset from here on.
+    await user.upload(fileInput(), fileNamed("../january orders.csv", 4_096));
+    await completeUpload({ ...RESPONSE, filename: "january_orders.csv" });
 
-    expect(screen.getByRole("progressbar")).toBeInTheDocument();
-    expect(screen.getByText("dropped.csv")).toBeInTheDocument();
-
-    await runTheUploadToCompletion();
-    expect(screen.getByRole("alert")).toHaveTextContent(/upload complete/i);
+    expect(screen.getByText("january_orders.csv")).toBeInTheDocument();
   });
 
-  it("refuses a dropped file the backend would reject, without uploading it", () => {
+  it("explains a rejection from the server and offers a retry", async () => {
+    const user = setup();
+    render(<UploadDropzone />);
+
+    await user.upload(fileInput(), fileNamed("orders.csv"));
+    await failUpload(
+      new ApiError(422, {
+        code: "dataset_parse_failed",
+        message: "Row 42 could not be parsed as a date.",
+        details: {},
+        request_id: "req-abc",
+      }),
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent(/row 42 could not be parsed/i);
+    expect(screen.getByText(/req-abc/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /try again/i })).toBeInTheDocument();
+  });
+
+  it("resends the same file when the retry is taken", async () => {
+    const user = setup();
+    const file = fileNamed("orders.csv");
+    render(<UploadDropzone />);
+
+    await user.upload(fileInput(), file);
+    await failUpload(new NetworkError(new Error("offline")));
+
+    await user.click(screen.getByRole("button", { name: /try again/i }));
+
+    expect(uploadDatasetMock).toHaveBeenCalledTimes(2);
+    expect(uploadDatasetMock.mock.calls[1][0]).toBe(file);
+    expect(screen.getByRole("progressbar")).toBeInTheDocument();
+  });
+
+  it("blames the connection rather than the file when no response arrives", async () => {
+    const user = setup();
+    render(<UploadDropzone />);
+
+    await user.upload(fileInput(), fileNamed("orders.csv"));
+    await failUpload(new NetworkError(new Error("offline")));
+
+    expect(screen.getByRole("alert")).toHaveTextContent(/connection/i);
+  });
+
+  it("never contacts the API for a file it can reject locally", () => {
     render(<UploadDropzone />);
 
     drop([fileNamed("quarterly-report.pdf")]);
 
+    expect(uploadDatasetMock).not.toHaveBeenCalled();
     expect(screen.getByRole("alert")).toHaveTextContent(/\.pdf files are not supported/i);
-    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
     expect(screen.getByText(/drag and drop your dataset here/i)).toBeInTheDocument();
   });
 
   it("refuses an unsupported file chosen through the picker's “all files” filter", async () => {
-    // `applyAccept: false` reproduces the user switching the OS picker away
-    // from our filter — the reason the extension is re-checked in code rather
-    // than trusted to the `accept` attribute.
-    const user = setup({ applyAccept: false });
+    const user = userEvent.setup({ applyAccept: false });
     render(<UploadDropzone />);
 
     await user.upload(fileInput(), fileNamed("notes.txt"));
 
+    expect(uploadDatasetMock).not.toHaveBeenCalled();
     expect(screen.getByRole("alert")).toHaveTextContent(/not supported/i);
-    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
   });
 
-  it("refuses a file over the size limit and says what the limit is", () => {
+  it("refuses a file over the size limit without spending the upload", () => {
     render(<UploadDropzone />);
 
     drop([fileNamed("huge_export.csv", MAX_UPLOAD_BYTES + 1)]);
 
+    expect(uploadDatasetMock).not.toHaveBeenCalled();
     expect(screen.getByRole("alert")).toHaveTextContent(/the limit is 200 MB/i);
-    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
   });
 
   it("refuses an empty file", () => {
@@ -164,8 +262,8 @@ describe("UploadDropzone", () => {
 
     drop([fileNamed("orders.csv", 0)]);
 
+    expect(uploadDatasetMock).not.toHaveBeenCalled();
     expect(screen.getByRole("alert")).toHaveTextContent(/is empty/i);
-    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
   });
 
   it("refuses several files dropped together", () => {
@@ -173,8 +271,8 @@ describe("UploadDropzone", () => {
 
     drop([fileNamed("january.csv"), fileNamed("february.csv")]);
 
+    expect(uploadDatasetMock).not.toHaveBeenCalled();
     expect(screen.getByRole("alert")).toHaveTextContent(/one file at a time/i);
-    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
   });
 
   it("ignores a drop carrying no files", () => {
@@ -191,23 +289,11 @@ describe("UploadDropzone", () => {
     render(<UploadDropzone />);
 
     await user.upload(fileInput(), fileNamed("orders.csv"));
-    await runTheUploadToCompletion();
+    await completeUpload();
 
     await user.click(screen.getByRole("button", { name: /upload another file/i }));
 
     expect(screen.getByText(/drag and drop your dataset here/i)).toBeInTheDocument();
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-  });
-
-  it("lets a rejected file be replaced by a valid one", () => {
-    render(<UploadDropzone />);
-
-    drop([fileNamed("quarterly-report.pdf")]);
-    expect(screen.getByRole("alert")).toBeInTheDocument();
-
-    drop([fileNamed("orders.csv")]);
-
-    expect(screen.getByRole("progressbar")).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });

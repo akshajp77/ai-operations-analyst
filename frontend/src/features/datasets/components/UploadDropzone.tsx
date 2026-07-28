@@ -10,7 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
 
-import { useSimulatedUpload } from "../hooks/useSimulatedUpload";
+import { useUploadDataset } from "../hooks/useUploadDataset";
 import { formatFileSize } from "../format";
 import {
   ACCEPTED_EXTENSIONS,
@@ -24,13 +24,24 @@ export interface UploadDropzoneProps {
 }
 
 /**
+ * Group thousands so a six-figure row count stays readable.
+ *
+ * The locale is pinned rather than left to the browser: an unpinned
+ * `toLocaleString` renders differently on the server and the client and
+ * produces a hydration mismatch.
+ */
+function formatCount(value: number): string {
+  return value.toLocaleString("en-US");
+}
+
+/**
  * Choose a dataset by dropping it or picking it, and watch it upload.
  *
  * The interactive leaf of the upload page: everything stateful is confined
  * here so the route itself stays a Server Component.
  */
 export function UploadDropzone({ className }: UploadDropzoneProps) {
-  const { state, select, reset } = useSimulatedUpload();
+  const { state, select, reset } = useUploadDataset();
   const inputId = useId();
   const [isDraggedOver, setIsDraggedOver] = useState(false);
 
@@ -155,11 +166,40 @@ export function UploadDropzone({ className }: UploadDropzoneProps) {
                 <p className="text-muted-foreground text-xs">{formatFileSize(state.file.size)}</p>
               </div>
               <span className="text-muted-foreground text-sm tabular-nums">
-                {Math.round(state.progress)}%
+                {state.progress === null ? "…" : `${Math.round(state.progress)}%`}
               </span>
             </div>
+            {/* A null value renders Radix's indeterminate bar, which is the
+                honest display when the browser cannot measure the request. */}
             <Progress value={state.progress} aria-label="Upload progress" />
-            <p className="text-muted-foreground text-xs">Uploading…</p>
+            <p className="text-muted-foreground text-xs">
+              {state.progress === 100 ? "Processing the file…" : "Uploading…"}
+            </p>
+          </div>
+        )}
+
+        {state.status === "failed" && (
+          <div className="flex flex-col gap-4">
+            <Alert variant="destructive">
+              <AlertCircle />
+              <AlertTitle>Upload failed</AlertTitle>
+              <AlertDescription>
+                <span>{state.failure.message}</span>
+                {state.failure.requestId !== null && (
+                  // Surfaced so a support request can name the exact request
+                  // in the server log rather than "it broke this morning".
+                  <span className="font-mono text-xs">Reference: {state.failure.requestId}</span>
+                )}
+              </AlertDescription>
+            </Alert>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => select([state.file])}>
+                Try again
+              </Button>
+              <Button variant="ghost" onClick={reset}>
+                Choose a different file
+              </Button>
+            </div>
           </div>
         )}
 
@@ -171,13 +211,26 @@ export function UploadDropzone({ className }: UploadDropzoneProps) {
                   it the tick silently renders in the body colour. */}
               <CheckCircle2 className="text-success!" />
               <AlertTitle>Upload complete</AlertTitle>
-              <AlertDescription>
-                <span className="text-foreground max-w-full truncate font-medium">
-                  {state.file.name}
-                </span>
-                <span>{formatFileSize(state.file.size)} — ready to analyse.</span>
-              </AlertDescription>
+              <AlertDescription>Parsed and ready to analyse.</AlertDescription>
             </Alert>
+
+            {/* Every value here was measured by the backend — the row and
+                column counts come from parsing the file, never from an
+                estimate made in the browser. */}
+            <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-sm">
+              <dt className="text-muted-foreground">Filename</dt>
+              <dd className="truncate font-medium">{state.dataset.filename}</dd>
+
+              <dt className="text-muted-foreground">Rows</dt>
+              <dd className="font-medium tabular-nums">{formatCount(state.dataset.rows)}</dd>
+
+              <dt className="text-muted-foreground">Columns</dt>
+              <dd className="font-medium tabular-nums">{formatCount(state.dataset.columns)}</dd>
+
+              <dt className="text-muted-foreground">Dataset ID</dt>
+              <dd className="truncate font-mono text-xs">{state.dataset.dataset_id}</dd>
+            </dl>
+
             <div>
               <Button variant="outline" onClick={reset}>
                 Upload another file

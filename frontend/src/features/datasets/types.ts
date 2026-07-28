@@ -2,6 +2,18 @@
  * Types local to the datasets feature.
  */
 
+import type { DatasetUploadResponse } from "./api";
+
+/** Why an upload that reached the server did not succeed. */
+export interface UploadFailure {
+  /** Ready to render. See `failures.ts` for how it is chosen. */
+  message: string;
+  /** The backend's stable error code, when there was one. */
+  code: string | null;
+  /** Correlation id — show it, so a support request can find the request. */
+  requestId: string | null;
+}
+
 /**
  * Why a chosen file cannot be uploaded.
  *
@@ -26,11 +38,18 @@ export type FileRejection =
  * type. Four independent booleans would make those combinations merely
  * unlikely rather than impossible.
  *
- * The raw `File` is retained rather than a copied name/size pair, so that
- * sending the real request later needs no change to this type.
+ * `rejected` and `failed` are separate states because they are different
+ * events: `rejected` is this browser refusing to send a file, `failed` is the
+ * server refusing one it received. Only the second has a request id, and only
+ * the first leaves the dropzone as the thing to retry against.
+ *
+ * `progress` is nullable because a browser cannot always measure a request
+ * body; `null` means "in flight, extent unknown" and renders as an
+ * indeterminate bar rather than a dishonest 0%.
  */
 export type UploadState =
   | { status: "idle" }
   | { status: "rejected"; rejection: FileRejection }
-  | { status: "uploading"; file: File; progress: number }
-  | { status: "success"; file: File };
+  | { status: "uploading"; file: File; progress: number | null }
+  | { status: "success"; file: File; dataset: DatasetUploadResponse }
+  | { status: "failed"; file: File; failure: UploadFailure };

@@ -88,11 +88,31 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
+      # `api.generated.ts` is gitignored, so a fresh checkout does not have it
+      # and anything importing it fails to compile here. The `contract` job
+      # regenerates it to prove the schema is current; this job needs it for
+      # the more basic reason that the frontend does not type-check without it.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+
       - name: Install
         working-directory: frontend
         # `npm ci` installs exactly the lockfile. `npm install` may silently
         # resolve a different version than the one that was reviewed.
         run: npm ci
+
+      - name: Generate API types
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e "./backend[dev]"
+          mkdir -p packages/shared-types
+          cd backend && python -c \
+            "import json; from app.main import create_app; print(json.dumps(create_app().openapi(), indent=2))" \
+            > ../packages/shared-types/openapi.json
+          cd ../frontend && npm run generate:types
 
       - name: Lint
         working-directory: frontend
